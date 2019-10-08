@@ -373,19 +373,25 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
     protected function getAndApplyPatch(RemoteFilesystem $downloader, $install_path, $patch_url)
     {
 
+        $this->io->write('getAndApplyPatch url = '. $patch_url);
         // Local patch file.
         if (file_exists($patch_url)) {
+            $this->io->write('getAndApplyPatch file exists');
             $filename = realpath($patch_url);
+            $this->io->write('getAndApplyPatch $filename = '. $filename);
         } else {
             // Generate random (but not cryptographically so) filename.
             $filename = uniqid(sys_get_temp_dir() . '/') . ".patch";
-
+            $this->io->write('getAndApplyPatch uniqid $filename = '. $filename);
             // Download file from remote filesystem to this location.
             $hostname = parse_url($patch_url, PHP_URL_HOST);
 
+            $this->io->write('getAndApplyPatch $hostname = '. $hostname);
             try {
+                $this->io->write('getAndApplyPatch copy');
                 $downloader->copy($hostname, $patch_url, $filename, false);
             } catch (\Exception $e) {
+                $this->io->write('getAndApplyPatch copy exception ');
                 // In case of an exception, retry once as the download might
                 // have failed due to intermittent network issues.
                 $downloader->copy($hostname, $patch_url, $filename, false);
@@ -398,26 +404,40 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
         // p0 is next likely. p2 is extremely unlikely, but for some special cases,
         // it might be useful. p4 is useful for Magento 2 patches
         $patch_levels = $this->getConfig('patch-levels');
+        
         foreach ($patch_levels as $patch_level) {
-            if ($this->io->isVerbose()) {
+            if ($this->io->isVerbose() || true) {
                 $comment = 'Testing ability to patch with git apply.';
                 $comment .= ' This command may produce errors that can be safely ignored.';
                 $this->io->write('<comment>' . $comment . '</comment>');
             }
+            $this->io->write('getAndApplyPatch exec ' . sprintf('git -C %s apply --check -v %s %s',
+                $install_path,
+                $patch_level,
+                $filename)
+            );
+            
             $checked = $this->executeCommand(
                 'git -C %s apply --check -v %s %s',
                 $install_path,
                 $patch_level,
                 $filename
             );
+            
             $output = $this->executor->getErrorOutput();
+            $this->io->write('error output ' . $output);
             if (substr($output, 0, 7) === 'Skipped') {
                 // Git will indicate success but silently skip patches in some scenarios.
                 //
                 // @see https://github.com/cweagans/composer-patches/pull/165
                 $checked = false;
+                $this->io->write('git siilently failed');
             }
             if ($checked) {
+                $this->io->write('git apply succesful style ' . sprintf('git -C %s apply %s %s',
+                    $install_path,
+                    $patch_level,
+                    $filename));
                 // Apply the first successful style.
                 $patched = $this->executeCommand(
                     'git -C %s apply %s %s',
@@ -429,12 +449,18 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
             }
         }
 
+        $this->io->write('git rare case, so fallback to "patch"');
         // In some rare cases, git will fail to apply a patch, fallback to using
         // the 'patch' command.
         if (!$patched) {
             foreach ($patch_levels as $patch_level) {
                 // --no-backup-if-mismatch here is a hack that fixes some
                 // differences between how patch works on windows and unix.
+                $this->io->write('git rare case, so fallback to "patch"' . sprintf("patch %s --no-backup-if-mismatch -d %s < %s",
+                    $patch_level,
+                    $install_path,
+                    $filename
+                ));
                 if ($patched = $this->executeCommand(
                     "patch %s --no-backup-if-mismatch -d %s < %s",
                     $patch_level,
@@ -447,6 +473,7 @@ class Patches implements PluginInterface, EventSubscriberInterface, Capable
             }
         }
 
+        $this->io->write('cleanup hostname thingy filename');
         // Clean up the temporary patch file.
         if (isset($hostname)) {
             unlink($filename);
